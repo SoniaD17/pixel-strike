@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PIXEL STRIKE</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#000; display:flex; align-items:center; justify-content:center; height:100vh; overflow:hidden; }
+canvas { display:block; image-rendering:pixelated; }
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="400"></canvas>
+<script>
+const W=800, H=400, T=4, GROUND=340;
+const PLAYER_SPEED=3, BULLET_SPEED=9, SHOOT_CD=15, STEP_MS=1000/60;
+
+// Palette: keys are single chars used in sprite arrays
+const PAL = {
+  '0': null,
+  '1': '#FFBF86', // skin
+  '2': '#8B1A1A', // dark red hair
+  '3': '#C8223A', // red jacket
+  '4': '#2244AA', // blue pants
+  '5': '#888888', // gun metal
+  '6': '#111111', // eyes/outline
+  '7': '#FFD700', // gold belt
+  '8': '#DD2222', // enemy red head
+  '9': '#FFFFFF', // white
+  'a': '#FF6600', // enemy orange body
+  'b': '#444455', // armor gray
+  'c': '#00FF41', // green
+  'd': '#FFAAAA', // light pink
+  'e': '#663300', // brown boots
+  'f': '#AAAAAA', // light gray empty heart
+};
+
+function drawSprite(ctx, grid, x, y) {
+  for (let r=0;r<grid.length;r++) {
+    const row = grid[r];
+    for (let c=0;c<row.length;c++) {
+      const k=row[c];
+      if (!k || k==='0') continue;
+      const col=PAL[k]; if (!col) continue;
+      ctx.fillStyle=col;
+      ctx.fillRect(x+c*T, y+r*T, T, T);
+    }
+  }
+}
+
+// ── Bitmap font 5×7 ─────────────────────────────────────────
+const FONT={
+  'A':['01100','10010','10010','11110','10010','10010','00000'],
+  'B':['11100','10010','11100','10010','10010','11100','00000'],
+  'C':['01110','10000','10000','10000','10000','01110','00000'],
+  'D':['11100','10010','10010','10010','10010','11100','00000'],
+  'E':['11110','10000','11100','10000','10000','11110','00000'],
+  'F':['11110','10000','11100','10000','10000','10000','00000'],
+  'G':['01110','10000','10000','10110','10010','01110','00000'],
+  'H':['10010','10010','11110','10010','10010','10010','00000'],
+  'I':['11100','01000','01000','01000','01000','11100','00000'],
+  'K':['10010','10100','11000','10100','10010','10010','00000'],
+  'L':['10000','10000','10000','10000','10000','11110','00000'],
+  'M':['10001','11011','10101','10001','10001','10001','00000'],
+  'N':['10010','11010','10110','10010','10010','10010','00000'],
+  'O':['01100','10010','10010','10010','10010','01100','00000'],
+  'P':['11100','10010','11100','10000','10000','10000','00000'],
+  'R':['11100','10010','11100','10100','10010','10010','00000'],
+  'S':['01110','10000','01100','00010','00010','11100','00000'],
+  'T':['11111','00100','00100','00100','00100','00100','00000'],
+  'U':['10010','10010','10010','10010','10010','01100','00000'],
+  'V':['10001','10001','10001','01010','01010','00100','00000'],
+  'W':['10001','10001','10101','10101','11011','10001','00000'],
+  'X':['10010','10010','01100','01100','10010','10010','00000'],
+  'Y':['10010','10010','01100','00100','00100','00100','00000'],
+  '0':['01100','10010','10110','11010','10010','01100','00000'],
+  '1':['01000','11000','01000','01000','01000','11100','00000'],
+  '2':['01100','10010','00100','01000','10000','11110','00000'],
+  '3':['11100','00010','01100','00010','00010','11100','00000'],
+  '4':['10010','10010','11110','00010','00010','00010','00000'],
+  '5':['11110','10000','11100','00010','00010','11100','00000'],
+  '6':['01100','10000','11100','10010','10010','01100','00000'],
+  '7':['11110','00010','00100','01000','01000','01000','00000'],
+  '8':['01100','10010','01100','10010','10010','01100','00000'],
+  '9':['01100','10010','01110','00010','00010','01100','00000'],
+  ':':['00000','01000','00000','00000','01000','00000','00000'],
+  ' ':['00000','00000','00000','00000','00000','00000','00000'],
+  '!':['01000','01000','01000','01000','00000','01000','00000'],
+  '/':['00010','00010','00100','01000','10000','10000','00000'],
+};
+
+function drawText(ctx, str, x, y, color, scale=1) {
+  const s=scale*T; let cx=x;
+  for (const ch of str.toUpperCase()) {
+    const g=FONT[ch]; if (!g) { cx+=4*s; continue; }
+    ctx.fillStyle=color;
+    for (let r=0;r<7;r++) for (let c=0;c<5;c++) {
+      if (g[r][c]==='1') ctx.fillRect(cx+c*s, y+r*s, s, s);
+    }
+    cx+=6*s;
+  }
+}
+function tw(str,scale=1){return str.length*6*scale*T;}
+
+// ── Sprites ──────────────────────────────────────────────────
+// Player: 10 cols × 16 rows, 2 walk frames
+const PLAYER=[
+ [// frame 0
+  ['0','0','2','2','2','2','0','0','0','0'],
+  ['0','0','2','2','2','2','2','2','0','0'],
+  ['0','0','1','1','1','1','0','0','0','0'],
+  ['0','1','1','1','1','1','0','0','0','0'],
+  ['0','1','6','1','1','6','1','0','0','0'],
+  ['0','1','1','d','1','1','1','0','0','0'],
+  ['3','3','3','3','3','3','5','5','5','0'],
+  ['3','3','3','3','3','3','5','0','0','0'],
+  ['3','3','3','3','3','3','0','0','0','0'],
+  ['3','3','3','3','3','3','0','0','0','0'],
+  ['7','7','7','7','7','7','0','0','0','0'],
+  ['4','4','0','4','4','0','0','0','0','0'],
+  ['4','4','0','4','4','0','0','0','0','0'],
+  ['4','4','0','4','0','0','0','0','0','0'],
+  ['4','4','0','4','0','0','0','0','0','0'],
+  ['e','e','0','e','0','0','0','0','0','0'],
+ ],
+ [// frame 1
+  ['0','0','2','2','2','2','0','0','0','0'],
+  ['0','0','2','2','2','2','2','2','0','0'],
+  ['0','0','1','1','1','1','0','0','0','0'],
+  ['0','1','1','1','1','1','0','0','0','0'],
+  ['0','1','6','1','1','6','1','0','0','0'],
+  ['0','1','1','d','1','1','1','0','0','0'],
+  ['3','3','3','3','3','3','5','5','5','0'],
+  ['3','3','3','3','3','3','5','0','0','0'],
+  ['3','3','3','3','3','3','0','0','0','0'],
+  ['3','3','3','3','3','3','0','0','0','0'],
+  ['7','7','7','7','7','7','0','0','0','0'],
+  ['4','4','0','4','4','0','0','0','0','0'],
+  ['4','4','0','4','4','0','0','0','0','0'],
+  ['0','4','0','4','4','0','0','0','0','0'],
+  ['0','4','0','4','4','0','0','0','0','0'],
+  ['0','e','0','e','e','0','0','0','0','0'],
+ ]
+];
+
+const WALKER=[
+  ['0','8','8','8','0'],
+  ['8','8','8','8','8'],
+  ['8','6','8','6','8'],
+  ['8','d','8','8','8'],
+  ['0','8','8','8','0'],
+  ['a','a','a','a','a'],
+  ['a','a','a','a','a'],
+  ['a','0','a','0','a'],
+  ['a','0','a','0','a'],
+  ['e','0','e','0','e'],
+];
+
+const RUSHER=[
+  ['0','8','8','0','0'],
+  ['8','8','8','8','0'],
+  ['8','6','8','6','0'],
+  ['8','8','8','8','8'],
+  ['0','8','a','a','8'],
+  ['a','a','a','a','0'],
+  ['a','a','a','a','0'],
+  ['0','a','0','a','0'],
+  ['0','a','0','a','0'],
+  ['0','e','0','e','0'],
+];
+
+const ARMORED_S=[
+  ['b','0','8','8','8','0'],
+  ['b','8','8','8','8','8'],
+  ['b','8','6','8','6','8'],
+  ['b','8','d','8','8','8'],
+  ['b','0','8','8','8','0'],
+  ['b','b','a','a','a','a'],
+  ['b','b','a','a','a','a'],
+  ['b','0','a','0','a','0'],
+  ['b','0','a','0','a','0'],
+  ['b','0','e','0','e','0'],
+];
+
+const ARMORED=[
+  ['0','0','8','8','8','0'],
+  ['0','8','8','8','8','8'],
+  ['0','8','6','8','6','8'],
+  ['0','8','d','8','8','8'],
+  ['0','0','8','8','8','0'],
+  ['0','0','a','a','a','a'],
+  ['0','0','a','a','a','a'],
+  ['0','0','a','0','a','0'],
+  ['0','0','a','0','a','0'],
+  ['0','0','e','0','e','0'],
+];
+
+const HEART_F=[
+  ['0','3','3','0','3','3','0'],
+  ['3','3','3','3','3','3','3'],
+  ['3','3','3','3','3','3','3'],
+  ['0','3','3','3','3','3','0'],
+  ['0','0','3','3','3','0','0'],
+  ['0','0','0','3','0','0','0'],
+];
+const HEART_E=[
+  ['0','f','f','0','f','f','0'],
+  ['f','0','0','f','0','0','f'],
+  ['f','0','0','0','0','0','f'],
+  ['0','f','0','0','0','f','0'],
+  ['0','0','f','0','f','0','0'],
+  ['0','0','0','f','0','0','0'],
+];
+
+// Powerups
+const PU_HEALTH=[
+  ['0','7','7','7','0'],
+  ['7','7','7','7','7'],
+  ['7','7','7','7','7'],
+  ['7','7','7','7','7'],
+  ['7','7','7','7','7'],
+  ['0','7','7','7','0'],
+  ['0','9','9','9','0'],
+];
+
+const PU_RAPID=[
+  ['0','9','9','9','0'],
+  ['9','c','c','c','9'],
+  ['9','c','9','c','9'],
+  ['9','c','c','c','9'],
+  ['9','9','9','9','9'],
+  ['0','9','9','9','0'],
+  ['0','c','0','c','0'],
+];
+
+const PU_SHIELD=[
+  ['0','c','c','c','0'],
+  ['c','0','0','0','c'],
+  ['c','0','9','0','c'],
+  ['c','0','0','0','c'],
+  ['0','c','c','c','0'],
+  ['0','0','c','0','0'],
+  ['0','0','9','0','0'],
+];
+
+// ── Level config ─────────────────────────────────────────────
+const LEVELS=[
+  {killsReq:15, spawnInt:120, maxOnScreen:4, mix:['walker','walker','walker']},
+  {killsReq:25, spawnInt:80,  maxOnScreen:6, mix:['walker','walker','rusher']},
+  {killsReq:35, spawnInt:55,  maxOnScreen:8, mix:['rusher','armored','armored']},
+];
+
+// ── Background ───────────────────────────────────────────────
+const STARS=Array.from({length:60},()=>({x:Math.random()*W, y:10+Math.random()*180}));
+const BLDGS=Array.from({length:22},(_,i)=>({
+  x:Math.floor(i*(W/22)), w:28+Math.floor(Math.random()*18), h:35+Math.floor(Math.random()*90)
+}));
+
+// ── Game state ───────────────────────────────────────────────
+let gs={screen:'MENU', hiScore:parseInt(localStorage.getItem('pxhi'))||0};
+let keys={}, frame=0;
+
+function newPlayer(){
+  return {x:50,y:GROUND-64,hp:3,animF:0,animT:0,shootCD:0,invT:0,deaths:0,rapidFireT:0,shieldT:0};
+}
+function initLevel(n){
+  const cfg=LEVELS[n-1];
+  gs.level=n; gs.kills=0; gs.enemies=[]; gs.bullets=[]; gs.particles=[]; gs.powerups=[];
+  gs.spawner={timer:0, interval:cfg.spawnInt, spawned:0};
+  gs.levelClearT=0;
+}
+function startGame(){
+  gs={screen:'PLAYING', level:1, score:0,
+      player:newPlayer(), enemies:[], bullets:[], particles:[], powerups:[],
+      kills:0, spawner:{timer:0,interval:120,spawned:0},
+      levelClearT:0,
+      hiScore:gs.hiScore};
+}
+
+document.addEventListener('keydown',e=>{keys[e.code]=true; e.preventDefault();});
+document.addEventListener('keyup',  e=>{keys[e.code]=false;});
+
+// ── Particles ────────────────────────────────────────────────
+function spawnParts(x,y,col,n=8){
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, sp=1+Math.random()*3;
+    gs.particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:20+Math.random()*10,maxLife:30,col});
+  }
+  if(gs.particles.length>100) gs.particles.splice(0,20);
+}
+
+// ── Update ───────────────────────────────────────────────────
+function update(){
+  frame++;
+  const scr=gs.screen;
+  if(scr==='MENU'){
+    if(keys['Enter']||keys['Space']){keys['Enter']=keys['Space']=false; startGame();}
+    return;
+  }
+  if(scr==='GAME_OVER'||scr==='VICTORY'){
+    if(keys['Enter']||keys['Space']){keys['Enter']=keys['Space']=false; gs.screen='MENU';}
+    return;
+  }
+  if(scr==='LEVEL_CLEAR'){
+    gs.levelClearT++;
+    if(gs.levelClearT>180){
+      if(gs.level>=3) gs.screen='VICTORY';
+      else{initLevel(gs.level+1); gs.screen='PLAYING';}
+    }
+    return;
+  }
+
+  const pl=gs.player, cfg=LEVELS[gs.level-1];
+
+  // Move
+  if(keys['ArrowLeft'])  pl.x=Math.max(4,        pl.x-PLAYER_SPEED);
+  if(keys['ArrowRight']) pl.x=Math.min(W/2-44,   pl.x+PLAYER_SPEED);
+  if(keys['ArrowUp'])    pl.y=Math.max(80,        pl.y-PLAYER_SPEED);
+  if(keys['ArrowDown'])  pl.y=Math.min(GROUND-64, pl.y+PLAYER_SPEED);
+
+  // Walk anim
+  if(keys['ArrowLeft']||keys['ArrowRight']||keys['ArrowUp']||keys['ArrowDown']){
+    if(++pl.animT>=8){pl.animF^=1; pl.animT=0;}
+  }
+
+  // Shoot (rapid fire halves cooldown)
+  if(pl.shootCD>0) pl.shootCD--;
+  const cd=pl.rapidFireT>0?Math.ceil(SHOOT_CD/2):SHOOT_CD;
+  if(keys['Space']&&pl.shootCD===0){
+    gs.bullets.push({x:pl.x+40,y:pl.y+24});
+    pl.shootCD=cd;
+  }
+
+  // Bullets move
+  gs.bullets=gs.bullets.filter(b=>{b.x+=BULLET_SPEED; return b.x<W+20;});
+
+  // Spawn enemies
+  const sp=gs.spawner;
+  if(++sp.timer>=sp.interval && gs.enemies.length<cfg.maxOnScreen && sp.spawned<cfg.killsReq+cfg.maxOnScreen){
+    sp.timer=0; sp.spawned++;
+    const type=cfg.mix[Math.floor(Math.random()*cfg.mix.length)];
+    const hp=type==='armored'?2:1;
+    gs.enemies.push({x:W+8, y:GROUND-40, hp, type,
+      speed:(type==='rusher'?2.2:type==='armored'?1.6:1.2)*(0.9+Math.random()*0.2),
+      animF:0,animT:0, shielded:type==='armored', score:type==='armored'?30:type==='rusher'?20:10});
+  }
+
+  // Move enemies
+  for(const e of gs.enemies){
+    e.x-=e.speed;
+    if(++e.animT>=10){e.animF^=1; e.animT=0;}
+  }
+
+  // Bullet-enemy collisions
+  const deadBullets=new Set();
+  for(let bi=0;bi<gs.bullets.length;bi++){
+    const b=gs.bullets[bi];
+    for(const e of gs.enemies){
+      if(e.hp<=0) continue;
+      const ew=(e.type==='armored'?6:5)*T, eh=10*T;
+      if(b.x<e.x+ew && b.x+T*2>e.x && b.y<e.y+eh && b.y+T>e.y){
+        deadBullets.add(bi);
+        e.hp--;
+        if(e.type==='armored'&&e.hp===1) e.shielded=false;
+        spawnParts(b.x,b.y,'#FF8800',5);
+        if(e.hp<=0){
+          spawnParts(e.x+10,e.y+20,'#FF4400',12);
+          gs.kills++; gs.score+=e.score;
+          // Spawn powerups (20% chance)
+          if(Math.random()<0.2){
+            const puType=['health','rapid','shield'][Math.floor(Math.random()*3)];
+            gs.powerups.push({x:e.x, y:e.y, type:puType, life:300});
+          }
+          e.hp=0;
+        }
+        break;
+      }
+    }
+  }
+  gs.bullets=gs.bullets.filter((_,i)=>!deadBullets.has(i));
+
+  // Enemy-player collision
+  if(pl.invT>0) pl.invT--;
+  const pw2=8*T, ph2=16*T;
+  for(const e of gs.enemies){
+    if(e.hp<=0) continue;
+    const ew=(e.type==='armored'?6:5)*T, eh=10*T;
+    if(e.x<pl.x+pw2&&e.x+ew>pl.x&&e.y<pl.y+ph2&&e.y+eh>pl.y){
+      if(pl.shieldT>0){
+        // Shield absorbs hit
+        pl.shieldT=Math.max(60,pl.shieldT-30);
+        spawnParts(pl.x+pw2/2,pl.y+ph2/2,'#00FFFF',8);
+        e.hp=0;
+      } else if(pl.invT===0){
+        pl.hp--; pl.invT=90; pl.deaths++;
+        spawnParts(pl.x+pw2/2,pl.y+ph2/2,'#FF0000',10);
+        e.hp=0;
+        if(pl.hp<=0){
+          const hi=Math.max(gs.score,gs.hiScore);
+          localStorage.setItem('pxhi',hi); gs.hiScore=hi;
+          gs.screen='GAME_OVER'; return;
+        }
+      }
+    }
+  }
+
+  gs.enemies=gs.enemies.filter(e=>e.hp>0);
+  gs.particles=gs.particles.filter(p=>{p.x+=p.vx;p.y+=p.vy;p.life--;return p.life>0;});
+
+  // Powerups move & fade
+  for(const pu of gs.powerups){
+    pu.y+=2; pu.life--;
+  }
+  gs.powerups=gs.powerups.filter(pu=>pu.y<GROUND&&pu.life>0);
+
+  // Powerup collision with player
+  const pw=8*T, ph=16*T;
+  for(const pu of gs.powerups){
+    const puw=5*T, puh=7*T;
+    if(pu.x<pl.x+pw&&pu.x+puw>pl.x&&pu.y<pl.y+ph&&pu.y+puh>pl.y){
+      spawnParts(pu.x+2.5*T,pu.y+3.5*T,pu.type==='health'?'#FF0000':pu.type==='rapid'?'#00FF00':'#00FFFF',10);
+      if(pu.type==='health'&&pl.hp<3) pl.hp++;
+      else if(pu.type==='rapid') pl.rapidFireT=180; // 3 sec
+      else if(pu.type==='shield') pl.shieldT=180;
+      pu.life=0;
+    }
+  }
+
+  // Update rapid fire & shield
+  if(pl.rapidFireT>0) pl.rapidFireT--;
+  if(pl.shieldT>0) pl.shieldT--;
+
+  // Level clear
+  if(gs.kills>=cfg.killsReq && gs.enemies.length===0){
+    gs.screen='LEVEL_CLEAR'; gs.levelClearT=0;
+    if(gs.level===3){
+      const hi=Math.max(gs.score,gs.hiScore);
+      localStorage.setItem('pxhi',hi); gs.hiScore=hi;
+    }
+  }
+}
+
+// ── Render ───────────────────────────────────────────────────
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+
+function drawBG(){
+  ctx.fillStyle='#080810'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#eee';
+  for(const s of STARS) ctx.fillRect(s.x,s.y,2,2);
+  ctx.fillStyle='#12121e';
+  for(const b of BLDGS) ctx.fillRect(b.x,GROUND-b.h,b.w-2,b.h);
+  // windows
+  ctx.fillStyle='#FFE87C';
+  for(const b of BLDGS){
+    for(let wy=GROUND-b.h+6;wy<GROUND-10;wy+=12)
+      for(let wx=b.x+4;wx<b.x+b.w-6;wx+=8)
+        if(Math.sin(wx*7+wy*3)>0.2) ctx.fillRect(wx,wy,4,4);
+  }
+  ctx.fillStyle='#00FF41'; ctx.fillRect(0,GROUND,W,T);
+  ctx.fillStyle='#004400'; ctx.fillRect(0,GROUND+T,W,T*2);
+}
+
+function drawHUD(){
+  const pl=gs.player;
+  for(let i=0;i<3;i++) drawSprite(ctx,i<pl.hp?HEART_F:HEART_E,10+i*32,10);
+  const lt='LEVEL '+gs.level;
+  drawText(ctx,lt,W/2-tw(lt)/2,10,'#FFD700');
+  const st='SCORE:'+String(gs.score).padStart(5,'0');
+  drawText(ctx,st,W-tw(st)-10,10,'#00FF41');
+  // Powerup status
+  if(pl.rapidFireT>0) drawText(ctx,'RAPID',W-tw('RAPID')-10,32,'#00FF00');
+  if(pl.shieldT>0) drawText(ctx,'SHIELD',W-tw('SHIELD')-10,48,'#00FFFF');
+  // progress bar
+  const cfg=LEVELS[gs.level-1], pct=Math.min(gs.kills/cfg.killsReq,1);
+  ctx.fillStyle='#222'; ctx.fillRect(10,H-14,W-20,8);
+  ctx.fillStyle=pct<0.5?'#00AA33':pct<0.8?'#FFAA00':'#FF3300';
+  ctx.fillRect(10,H-14,(W-20)*pct,8);
+  ctx.strokeStyle='#555'; ctx.lineWidth=1; ctx.strokeRect(10,H-14,W-20,8);
+  const kt=gs.kills+'/'+cfg.killsReq;
+  drawText(ctx,kt,W/2-tw(kt,0.5)/2,H-13,'#FFF',0.5);
+}
+
+function drawPlayer(){
+  const pl=gs.player;
+  if(pl.invT>0&&Math.floor(pl.invT/4)%2===1) return;
+  // Draw shield aura
+  if(pl.shieldT>0){
+    ctx.globalAlpha=0.4;
+    ctx.strokeStyle='#00FFFF';
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.arc(pl.x+32,pl.y+32,40,0,Math.PI*2);
+    ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+  drawSprite(ctx,PLAYER[pl.animF],pl.x,pl.y);
+}
+
+function drawEnemies(){
+  for(const e of gs.enemies){
+    const spr=e.type==='walker'?WALKER:e.type==='rusher'?RUSHER:(e.shielded?ARMORED_S:ARMORED);
+    drawSprite(ctx,spr,e.x,e.y);
+  }
+}
+
+function drawBullets(){
+  for(const b of gs.bullets){
+    ctx.fillStyle='#FFFF44'; ctx.fillRect(b.x,b.y,T*3,T);
+    ctx.fillStyle='#FFFFFF'; ctx.fillRect(b.x+T,b.y,T,T);
+  }
+}
+
+function drawPowerups(){
+  for(const pu of gs.powerups){
+    ctx.globalAlpha=Math.min(1,pu.life/60);
+    const spr=pu.type==='health'?PU_HEALTH:pu.type==='rapid'?PU_RAPID:PU_SHIELD;
+    drawSprite(ctx,spr,pu.x,pu.y);
+    // Bobbing effect
+    const bob=Math.sin(frame*0.1)*T;
+    ctx.globalAlpha=0.3;
+    drawSprite(ctx,spr,pu.x,pu.y+T*2+bob);
+    ctx.globalAlpha=1;
+  }
+}
+
+function drawParticles(){
+  for(const p of gs.particles){
+    ctx.globalAlpha=p.life/p.maxLife;
+    ctx.fillStyle=p.col; ctx.fillRect(p.x,p.y,T,T);
+  }
+  ctx.globalAlpha=1;
+}
+
+function drawMedal(mx,my){
+  // ribbon
+  ctx.fillStyle='#CC44AA'; ctx.fillRect(mx-12,my+32,24,22);
+  ctx.fillStyle='#FF88DD'; ctx.fillRect(mx-7,my+32,7,22);
+  // outer glow
+  ctx.beginPath(); ctx.arc(mx,my,32,0,Math.PI*2);
+  ctx.fillStyle='#FFD700'; ctx.fill();
+  ctx.strokeStyle='#B8860B'; ctx.lineWidth=3; ctx.stroke();
+  // inner
+  ctx.beginPath(); ctx.arc(mx,my,24,0,Math.PI*2);
+  ctx.fillStyle='#FFC200'; ctx.fill();
+  // star
+  ctx.beginPath();
+  for(let i=0;i<10;i++){
+    const a=(i/10)*Math.PI*2-Math.PI/2;
+    const r=i%2===0?18:8;
+    const px=mx+Math.cos(a)*r, py=my+Math.sin(a)*r;
+    i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+  }
+  ctx.closePath(); ctx.fillStyle='#FFFACD'; ctx.fill();
+  // sparkles (animated)
+  for(let i=0;i<8;i++){
+    const a=(i/8)*Math.PI*2+(frame*0.03);
+    ctx.strokeStyle='#FFD700'; ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(mx+Math.cos(a)*34,my+Math.sin(a)*34);
+    ctx.lineTo(mx+Math.cos(a)*44,my+Math.sin(a)*44);
+    ctx.stroke();
+  }
+}
+
+function renderMenu(){
+  drawBG();
+  const t1='PIXEL STRIKE';
+  drawText(ctx,t1,W/2-tw(t1,2)/2,70,'#FF3344',2);
+  drawText(ctx,'A RETRO SHOOTER',W/2-tw('A RETRO SHOOTER')/2,142,'#888888');
+  if(Math.floor(frame/30)%2===0)
+    drawText(ctx,'PRESS ENTER TO PLAY',W/2-tw('PRESS ENTER TO PLAY')/2,200,'#FFD700');
+  drawText(ctx,'ARROW KEYS: MOVE',W/2-tw('ARROW KEYS: MOVE')/2,250,'#666666');
+  drawText(ctx,'SPACE: SHOOT',W/2-tw('SPACE: SHOOT')/2,272,'#666666');
+  const hi='HI:'+String(gs.hiScore).padStart(5,'0');
+  drawText(ctx,hi,W/2-tw(hi)/2,316,'#00FF41');
+}
+
+function renderPlaying(){
+  drawBG();
+  drawParticles();
+  drawEnemies();
+  drawBullets();
+  drawPowerups();
+  drawPlayer();
+  drawHUD();
+}
+
+function renderLevelClear(){
+  drawBG(); drawHUD();
+  ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,0,W,H);
+  const t='LEVEL '+gs.level+' CLEAR!';
+  drawText(ctx,t,W/2-tw(t,2)/2,120,'#FFD700',2);
+  const s='SCORE:'+String(gs.score).padStart(5,'0');
+  drawText(ctx,s,W/2-tw(s,1.5)/2,200,'#00FF41',1.5);
+  if(gs.level<3&&Math.floor(frame/20)%2===0){
+    const nt='GET READY FOR LEVEL '+(gs.level+1);
+    drawText(ctx,nt,W/2-tw(nt)/2,265,'#AAAAAA');
+  }
+}
+
+function renderVictory(){
+  drawBG();
+  ctx.fillStyle='rgba(0,0,20,0.7)'; ctx.fillRect(0,0,W,H);
+  const t='MISSION COMPLETE';
+  drawText(ctx,t,W/2-tw(t,2)/2,25,'#FFD700',2);
+  drawMedal(W/2,165);
+  const rank=gs.player.deaths===0?'S':gs.player.deaths===1?'A':gs.player.deaths===2?'B':'C';
+  drawText(ctx,'RANK: '+rank,W/2-tw('RANK: '+rank,1.5)/2,225,'#FF8800',1.5);
+  const s='FINAL SCORE:'+String(gs.score).padStart(5,'0');
+  drawText(ctx,s,W/2-tw(s)/2,278,'#00FF41');
+  if(Math.floor(frame/30)%2===0)
+    drawText(ctx,'PRESS ENTER',W/2-tw('PRESS ENTER')/2,322,'#FFFFFF');
+}
+
+function renderGameOver(){
+  drawBG();
+  ctx.fillStyle='rgba(80,0,0,0.55)'; ctx.fillRect(0,0,W,H);
+  drawText(ctx,'GAME OVER',W/2-tw('GAME OVER',2)/2,130,'#FF2222',2);
+  const s='SCORE:'+String(gs.score).padStart(5,'0');
+  drawText(ctx,s,W/2-tw(s,1.5)/2,210,'#FFFFFF',1.5);
+  if(Math.floor(frame/30)%2===0)
+    drawText(ctx,'PRESS ENTER',W/2-tw('PRESS ENTER')/2,278,'#AAAAAA');
+}
+
+function render(){
+  ctx.clearRect(0,0,W,H);
+  if(gs.screen==='MENU')        renderMenu();
+  else if(gs.screen==='PLAYING') renderPlaying();
+  else if(gs.screen==='LEVEL_CLEAR') renderLevelClear();
+  else if(gs.screen==='VICTORY') renderVictory();
+  else if(gs.screen==='GAME_OVER') renderGameOver();
+}
+
+// ── Game loop ────────────────────────────────────────────────
+let lastTime=0, acc=0;
+function loop(ts){
+  const dt=Math.min(ts-lastTime,100); lastTime=ts; acc+=dt;
+  while(acc>=STEP_MS){update(); acc-=STEP_MS;}
+  render();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
